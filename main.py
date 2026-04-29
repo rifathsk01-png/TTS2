@@ -1,87 +1,139 @@
 import os
 import logging
-from telegram import ReplyKeyboardMarkup, Update
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-
 from gtts import gTTS
-from firebase import save_user
+from database import save_user
 
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Temp user data (simple memory)
+# In-memory user state store
 user_data_store = {}
 
-# Start command
+# ── /start ────────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["Bangla", "English"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    user_id = str(update.message.from_user.id)
+    user_data_store[user_id] = {}  # Reset state on /start
 
+    keyboard = [["🇧🇩 Bangla", "🇬🇧 English"]]
     await update.message.reply_text(
-        "Welcome! Select Language:",
-        reply_markup=reply_markup
+        "👋 *Welcome! স্বাগতম!*\n\nSelect your language / ভাষা বেছে নাও 👇",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
     )
 
-# Handle messages
+# ── Message Handler ───────────────────────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
-    text = update.message.text
+    text    = update.message.text.strip()
 
+    # Init state if user never did /start
     if user_id not in user_data_store:
         user_data_store[user_id] = {}
 
     user = user_data_store[user_id]
 
-    # Step 1: Language
-    if text in ["Bangla", "English"]:
-        user["language"] = text
+    # ── Step 1: Language selection ─────────────────────────────────────────
+    if text in ["🇧🇩 Bangla", "🇬🇧 English"]:
+        user["language"] = "Bangla" if "Bangla" in text else "English"
+        user.pop("gender", None)  # clear old gender if restarting
 
-        keyboard = [["Male", "Female"]]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
+        keyboard = [["👨 Male", "👩 Female"]]
         await update.message.reply_text(
-            "Select Gender:",
-            reply_markup=reply_markup
+            "✅ Language selected!\n\nNow select your gender 👇",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
         )
         return
 
-    # Step 2: Gender
-    if text in ["Male", "Female"]:
-        user["gender"] = text
+    # ── Step 2: Gender selection ───────────────────────────────────────────
+    if text in ["👨 Male", "👩 Female"]:
+        if "language" not in user:
+            await update.message.reply_text(
+                "⚠️ Please select a language first. Use /start",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
 
-        await update.message.reply_text("Now send your text/script:")
+        user["gender"] = "Male" if "Male" in text else "Female"
+
+        lang_label = "বাংলায়" if user["language"] == "Bangla" else "in English"
+        await update.message.reply_text(
+            f"✅ Gender selected!\n\nNow send your text/script {lang_label} 👇",
+            reply_markup=ReplyKeyboardRemove(),
+        )
         return
 
-    # Step 3: Generate Voice
+    # ── Step 3: Generate Voice ─────────────────────────────────────────────
     if "language" in user and "gender" in user:
         lang = "bn" if user["language"] == "Bangla" else "en"
 
-        tts = gTTS(text=text, lang=lang)
-        file_name = f"voice_{user_id}.mp3"
-        tts.save(file_name)
+        await update.message.reply_text("⏳ Generating voice...")
 
-        # Send voice
-        with open(file_name, "rb") as audio:
-            await update.message.reply_voice(audio)
+        try:
+            tts = gTTS(text=text, lang=lang, slow=False)
+            file_name = f"voice_{user_id}.mp3"
+            tts.save(file_name)
 
-        # Save to Firebase
-        save_user(user_id, user)
+            with open(file_name, "rb") as audio:
+                await update.message.reply_voice(audio)
 
-        os.remove(file_name)
+            os.remove(file_name)
 
-        await update.message.reply_text("Done! Send another text if you want.")
+            # Save to Firebase
+            save_user(user_id, {
+                "user_id":   user_id,
+                "language":  user["language"],
+                "gender":    user["gender"],
+                "last_text": text[:300],
+            })
+
+            keyboard = [["🔁 Send Another", "🏠 Restart"]]
+            await update.message.reply_text(
+                "✅ Done! Send another text or restart 👇",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
+            )
+
+        except Exception as e:
+            logging.error(f"TTS error: {e}")
+            await update.message.reply_text("❌ Something went wrong. Please try again.")
+
         return
 
-# Main function
+    # ── Control buttons ────────────────────────────────────────────────────
+    if text == "🔁 Send Another":
+        await update.message.reply_text(
+            "Send your next text 👇",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    if text == "🏠 Restart":
+        user_data_store[user_id] = {}
+        keyboard = [["🇧🇩 Bangla", "🇬🇧 English"]]
+        await update.message.reply_text(
+            "🔄 Restarted! Select your language 👇",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
+        )
+        return
+
+    # ── Fallback ───────────────────────────────────────────────────────────
+    await update.message.reply_text(
+        "⚠️ Please use /start to begin.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("Bot running...")
-    app.run_polling()
+    print("🤖 Bot running...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
+            
