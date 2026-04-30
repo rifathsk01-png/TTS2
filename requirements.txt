@@ -1,0 +1,8 @@
+aiogram==3.13.1
+python-dotenv==1.0.1
+firebase-admin==6.5.0
+TTS==0.22.0
+torch>=2.1.0
+pydub==0.25.1
+langdetect==1.0.9
+aiofiles==24.1.0
