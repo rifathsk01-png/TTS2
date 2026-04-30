@@ -33,9 +33,9 @@ class OfflineTTS:
         self._lock = asyncio.Lock()
 
     def _load_model(self) -> TTS:
-        if self._model is None:
-            self._model = TTS(config.TTS_MODEL_MULTI)
-        return self._model
+    if self._model is None:
+        self._model = TTS(config.TTS_MODEL_EN)
+    return self._model
 
     @staticmethod
     def detect_language(text: str, fallback: str = "en") -> str:
@@ -242,36 +242,21 @@ class OfflineTTS:
         return str(cached_path)
 
     def _tts_to_file(
-        self,
-        model: TTS,
-        text: str,
-        wav_path: str,
-        language: str,
-        prefs: dict[str, Any],
-    ) -> None:
-        gender = prefs.get("gender", "female")
-        speaker_wav = self._speaker_for_gender(gender)
+    self,
+    model: TTS,
+    text: str,
+    wav_path: str,
+    language: str,
+    prefs: dict[str, Any],
+) -> None:
+    gender = prefs.get("gender", "female")
+    speaker = "p225" if gender == "female" else "p226"
 
-        kwargs: dict[str, Any] = {
-            "text": text,
-            "file_path": wav_path,
-        }
-
-        # XTTS-style multilingual models usually require language.
-        kwargs["language"] = "bn" if language == "bn" else "en"
-
-        if speaker_wav:
-            kwargs["speaker_wav"] = speaker_wav
-
-        try:
-            model.tts_to_file(**kwargs)
-        except Exception:
-            # Some Coqui models do not accept language or speaker_wav.
-            fallback_kwargs = {
-                "text": text,
-                "file_path": wav_path,
-            }
-            model.tts_to_file(**fallback_kwargs)
+    model.tts_to_file(
+        text=text,
+        file_path=wav_path,
+        speaker=speaker,
+    )
 
 
 tts_engine = OfflineTTS()
